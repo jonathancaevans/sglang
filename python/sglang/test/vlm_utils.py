@@ -36,6 +36,8 @@ class TestOpenAIMLLMServerBase(CustomTestCase):
 
     @classmethod
     def setUpClass(cls):
+        import tempfile
+
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
 
@@ -49,18 +51,60 @@ class TestOpenAIMLLMServerBase(CustomTestCase):
                 arg for arg in cls.fixed_args if arg != "--trust-remote-code"
             )
 
-        cls.process = popen_launch_server(
-            cls.model,
-            cls.base_url,
-            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            api_key=cls.api_key,
-            other_args=other_args,
+        # Create temp files to capture server output for debugging CI failures
+        cls._stdout_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix="_stdout.log", delete=False
         )
-        cls.base_url += "/v1"
+        cls._stderr_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix="_stderr.log", delete=False
+        )
+
+        try:
+            cls.process = popen_launch_server(
+                cls.model,
+                cls.base_url,
+                timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+                api_key=cls.api_key,
+                other_args=other_args,
+                return_stdout_stderr=(cls._stdout_file, cls._stderr_file),
+            )
+            cls.base_url += "/v1"
+        except Exception as e:
+            # If server fails to start, dump the captured logs for debugging
+            cls._stdout_file.close()
+            cls._stderr_file.close()
+            print(f"\n{'='*60}")
+            print(f"[DEBUG] Server failed to start for {cls.model}: {e}")
+            print(f"{'='*60}")
+            print(f"[DEBUG] Server STDOUT:")
+            print(f"{'='*60}")
+            try:
+                with open(cls._stdout_file.name, "r") as f:
+                    print(f.read())
+            except Exception as read_err:
+                print(f"Failed to read stdout: {read_err}")
+            print(f"{'='*60}")
+            print(f"[DEBUG] Server STDERR:")
+            print(f"{'='*60}")
+            try:
+                with open(cls._stderr_file.name, "r") as f:
+                    print(f.read())
+            except Exception as read_err:
+                print(f"Failed to read stderr: {read_err}")
+            print(f"{'='*60}")
+            raise
 
     @classmethod
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
+        # Clean up temp files
+        try:
+            cls._stdout_file.close()
+            cls._stderr_file.close()
+            os.unlink(cls._stdout_file.name)
+            os.unlink(cls._stderr_file.name)
+        except Exception:
+            pass
 
     def get_vision_request_kwargs(self):
         return self.get_request_kwargs()
